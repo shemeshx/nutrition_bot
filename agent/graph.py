@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from langgraph.prebuilt import create_react_agent
-from langgraph_checkpoint_sqlite import AsyncSqliteSaver
+from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from config import get_settings
