@@ -13,18 +13,13 @@ import db.repository as repo
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
+# Global checkpointer — opened once at startup via lifespan
 _memory: AsyncSqliteSaver | None = None
-_memory_lock = asyncio.Lock()
 
 
-async def get_memory() -> AsyncSqliteSaver:
+def set_memory(mem: AsyncSqliteSaver) -> None:
     global _memory
-    async with _memory_lock:
-        if _memory is None:
-            import os
-            os.makedirs(os.path.dirname(settings.CHECKPOINT_DB_PATH), exist_ok=True)
-            _memory = AsyncSqliteSaver.from_conn_string(settings.CHECKPOINT_DB_PATH)
-        return _memory
+    _memory = mem
 
 
 async def run_agent(user_id: int, user_message: str) -> str:
@@ -32,10 +27,9 @@ async def run_agent(user_id: int, user_message: str) -> str:
     system_prompt = get_system_prompt(user_profile)
     llm = create_llm()
     tools = get_tools_for_user(user_id)
-    memory = await get_memory()
 
     if not supports_tool_calling():
-        logger.warning(f"Model {settings.LLM_MODEL} may not support tool calling. Running without tools.")
+        logger.warning(f"Model {settings.LLM_MODEL} may not support tool calling.")
         result = await llm.ainvoke(
             [SystemMessage(content=system_prompt),
              HumanMessage(content=user_message)]
@@ -45,8 +39,8 @@ async def run_agent(user_id: int, user_message: str) -> str:
     agent = create_react_agent(
         llm,
         tools,
-        checkpointer=memory,
-        state_modifier=system_prompt,
+        checkpointer=_memory,
+        prompt=system_prompt,
     )
 
     config = {
