@@ -1,4 +1,5 @@
 import aiosqlite
+import json
 from datetime import date, datetime
 from typing import Optional
 from config import get_settings
@@ -30,6 +31,7 @@ async def init_db():
                 reminder_morning    TEXT,
                 reminder_evening    TEXT,
                 onboarded           INTEGER DEFAULT 0,
+                onboarding_state    TEXT,
                 updated_at          TEXT DEFAULT CURRENT_TIMESTAMP
             );
 
@@ -60,6 +62,31 @@ async def init_db():
                 logged_at   TEXT DEFAULT (datetime('now','localtime'))
             );
         """)
+        await db.commit()
+
+
+# ─── Onboarding state (persisted in DB) ──────────────────────────────────────
+
+async def get_onboarding_state(user_id: int) -> Optional[dict]:
+    async with aiosqlite.connect(DB) as db:
+        async with db.execute(
+            "SELECT onboarding_state FROM users WHERE user_id = ?", (user_id,)
+        ) as cur:
+            row = await cur.fetchone()
+            if row and row[0]:
+                return json.loads(row[0])
+            return None
+
+
+async def set_onboarding_state(user_id: int, state: Optional[dict]) -> None:
+    value = json.dumps(state) if state else None
+    async with aiosqlite.connect(DB) as db:
+        await db.execute(
+            """INSERT INTO users (user_id, onboarding_state)
+               VALUES (?, ?)
+               ON CONFLICT(user_id) DO UPDATE SET onboarding_state = excluded.onboarding_state""",
+            (user_id, value),
+        )
         await db.commit()
 
 

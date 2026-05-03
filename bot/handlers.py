@@ -27,10 +27,10 @@ def _calc_targets(profile: dict) -> dict:
         bmr = 10 * w + 6.25 * h - 5 * a - 161
 
     activity_factors = {
-        "sedentary":  1.2,
-        "light":      1.375,
-        "moderate":   1.55,
-        "active":     1.725,
+        "sedentary":   1.2,
+        "light":       1.375,
+        "moderate":    1.55,
+        "active":      1.725,
         "very_active": 1.9,
     }
     tdee = bmr * activity_factors.get(profile["activity"], 1.55)
@@ -38,7 +38,6 @@ def _calc_targets(profile: dict) -> dict:
     goal_delta = {"lose": -500, "maintain": 0, "gain": +300}
     cal_target = tdee + goal_delta.get(profile["goal"], 0)
 
-    # Macro split: 30% protein, 40% carbs, 30% fat
     protein_g = (cal_target * 0.30) / 4
     carbs_g   = (cal_target * 0.40) / 4
     fat_g     = (cal_target * 0.30) / 9
@@ -48,7 +47,7 @@ def _calc_targets(profile: dict) -> dict:
         "protein_g":  round(protein_g, 1),
         "carbs_g":    round(carbs_g, 1),
         "fat_g":      round(fat_g, 1),
-        "water_ml":   round(w * 35),  # 35ml per kg body weight
+        "water_ml":   round(w * 35),
     }
 
 
@@ -65,7 +64,8 @@ async def start_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    ctx.user_data["onboarding"] = {"step": "name"}
+    # Start onboarding — save state to DB
+    await repo.set_onboarding_state(user_id, {"step": "name"})
     await update.message.reply_text(
         "👋 *ברוך הבא לבוט התזונה שלך!*\n\n"
         "אני אעזור לך לנהל את התזונה, לעקוב אחר קלוריות ולהשיג את המטרות שלך.\n\n"
@@ -77,31 +77,32 @@ async def start_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # ─── Onboarding inline callbacks ──────────────────────────────────────────────
 
 async def onboarding_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
+    query   = update.callback_query
     await query.answer()
-    data = query.data
-    ob   = ctx.user_data.get("onboarding", {})
+    data    = query.data
+    user_id = query.from_user.id
+    ob      = await repo.get_onboarding_state(user_id) or {}
 
     if data.startswith("gender_"):
         ob["gender"] = data.split("_")[1]
         ob["step"]   = "age"
-        ctx.user_data["onboarding"] = ob
+        await repo.set_onboarding_state(user_id, ob)
         await query.edit_message_text("מה גילך? (שנים)")
 
     elif data.startswith("activity_"):
         ob["activity"] = data.split("_", 1)[1]
         ob["step"]     = "goal"
-        ctx.user_data["onboarding"] = ob
+        await repo.set_onboarding_state(user_id, ob)
         await query.edit_message_text(
             "מה המטרה שלך?", reply_markup=onboarding_goal_keyboard()
         )
 
     elif data.startswith("goal_"):
         ob["goal"] = data.split("_")[1]
-        await _finish_onboarding(query, ctx, ob)
+        await _finish_onboarding(query, ob)
 
 
-async def _finish_onboarding(query, ctx, ob: dict):
+async def _finish_onboarding(query, ob: dict):
     user_id = query.from_user.id
     targets = _calc_targets(ob)
 
@@ -115,9 +116,9 @@ async def _finish_onboarding(query, ctx, ob: dict):
         activity=ob["activity"],
         goal=ob["goal"],
         onboarded=1,
+        onboarding_state=None,
         **targets,
     )
-    ctx.user_data.pop("onboarding", None)
 
     goal_text = {"lose": "ירידה במשקל", "maintain": "שמירה", "gain": "עלייה במסה"}
     await query.edit_message_text(
@@ -139,20 +140,20 @@ async def message_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text    = update.message.text.strip()
 
-    # Onboarding flow
-    ob = ctx.user_data.get("onboarding")
-    if ob:
-        await _handle_onboarding_text(update, ctx, ob, text)
+    # Check if in onboarding flow (state persisted in DB)
+    ob = await repo.get_onboarding_state(user_id)
+    if ob and ob.get("step"):
+        await _handle_onboarding_text(update, ob, text)
         return
 
     # Quick menu buttons → natural language
     quick_commands = {
-        "📊 סיכום יומי": "תן לי סיכום יומי",
-        "💧 עדכן מים":   "עדכן מים",
-        "⚖️ דווח משקל": "דווח משקל",
-        "📅 היסטוריה":  "הצג לי את ההיסטוריה שלי",
-        "🍽️ הצע ארוחה": "הצע לי ארוחה מתאימה עכשיו",
-        "⚙️ פרופיל":    "הצג את הפרופיל שלי",
+        "📊 סיכום יומי":  "תן לי סיכום יומי",
+        "💧 עדכן מים":    "עדכן מים",
+        "⚖️ דווח משקל":  "דווח משקל",
+        "📅 היסטוריה":   "הצג לי את ההיסטוריה שלי",
+        "🍽️ הצע ארוחה":  "הצע לי ארוחה מתאימה עכשיו",
+        "⚙️ פרופיל":     "הצג את הפרופיל שלי",
     }
     text = quick_commands.get(text, text)
 
@@ -167,20 +168,19 @@ async def message_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         )
     except Exception as e:
         logger.error(f"Handler error: {e}", exc_info=True)
-        await update.message.reply_text(
-            "😕 קרתה שגיאה, נסה שוב בעוד רגע."
-        )
+        await update.message.reply_text("😕 קרתה שגיאה, נסה שוב בעוד רגע.")
 
 
-# ─── Onboarding text steps ────────────────────────────────────────────────────
+# ─── Onboarding text steps (state from DB) ───────────────────────────────────
 
-async def _handle_onboarding_text(update, ctx, ob, text):
-    step = ob.get("step")
+async def _handle_onboarding_text(update, ob: dict, text: str):
+    user_id = update.effective_user.id
+    step    = ob.get("step")
 
     if step == "name":
         ob["name"] = text
         ob["step"] = "gender"
-        ctx.user_data["onboarding"] = ob
+        await repo.set_onboarding_state(user_id, ob)
         await update.message.reply_text(
             f"נעים להכיר, {text}! 😊\n\nמה המין שלך?",
             reply_markup=onboarding_gender_keyboard(),
@@ -190,7 +190,7 @@ async def _handle_onboarding_text(update, ctx, ob, text):
         try:
             ob["age"] = int(text)
             ob["step"] = "height"
-            ctx.user_data["onboarding"] = ob
+            await repo.set_onboarding_state(user_id, ob)
             await update.message.reply_text('מה גובהך? (ס"מ — למשל: 175)')
         except ValueError:
             await update.message.reply_text("⚠️ אנא הכנס מספר תקין לגיל.")
@@ -199,7 +199,7 @@ async def _handle_onboarding_text(update, ctx, ob, text):
         try:
             ob["height_cm"] = float(text)
             ob["step"] = "weight"
-            ctx.user_data["onboarding"] = ob
+            await repo.set_onboarding_state(user_id, ob)
             await update.message.reply_text('מה משקלך הנוכחי? (ק"ג — למשל: 75.5)')
         except ValueError:
             await update.message.reply_text("⚠️ אנא הכנס מספר תקין לגובה.")
@@ -208,7 +208,7 @@ async def _handle_onboarding_text(update, ctx, ob, text):
         try:
             ob["weight_kg"] = float(text)
             ob["step"] = "activity"
-            ctx.user_data["onboarding"] = ob
+            await repo.set_onboarding_state(user_id, ob)
             await update.message.reply_text(
                 "מה רמת הפעילות הגופנית שלך?",
                 reply_markup=onboarding_activity_keyboard(),

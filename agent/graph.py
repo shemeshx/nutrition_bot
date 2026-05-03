@@ -28,10 +28,6 @@ async def get_memory() -> AsyncSqliteSaver:
 
 
 async def run_agent(user_id: int, user_message: str) -> str:
-    """
-    Runs the ReAct agent for a specific user.
-    Each user_id is a separate thread_id → separate conversation memory.
-    """
     user_profile = await repo.get_user(user_id)
     system_prompt = get_system_prompt(user_profile)
     llm = create_llm()
@@ -39,10 +35,7 @@ async def run_agent(user_id: int, user_message: str) -> str:
     memory = await get_memory()
 
     if not supports_tool_calling():
-        logger.warning(
-            f"Model {settings.LLM_MODEL} may not support tool calling. "
-            "Running without tools."
-        )
+        logger.warning(f"Model {settings.LLM_MODEL} may not support tool calling. Running without tools.")
         result = await llm.ainvoke(
             [SystemMessage(content=system_prompt),
              HumanMessage(content=user_message)]
