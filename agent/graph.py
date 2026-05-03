@@ -1,7 +1,6 @@
 import asyncio
 import logging
 from langgraph.prebuilt import create_react_agent
-from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from config import get_settings
@@ -13,14 +12,6 @@ import db.repository as repo
 logger = logging.getLogger(__name__)
 settings = get_settings()
 AGENT_TIMEOUT = 60  # seconds
-
-# Global checkpointer — opened once at startup via lifespan
-_memory: AsyncSqliteSaver | None = None
-
-
-def set_memory(mem: AsyncSqliteSaver) -> None:
-    global _memory
-    _memory = mem
 
 
 async def run_agent(user_id: int, user_message: str) -> str:
@@ -37,17 +28,16 @@ async def run_agent(user_id: int, user_message: str) -> str:
         )
         return result.content
 
+    # No checkpointer — each message is independent; all state lives in the DB.
+    # A persistent checkpointer caused broken-state loops when previous runs were
+    # interrupted (timeout/crash), making the agent hit the recursion limit.
     agent = create_react_agent(
         llm,
         tools,
-        checkpointer=_memory,
         prompt=system_prompt,
     )
 
-    config = {
-        "configurable": {"thread_id": str(user_id)},
-        "recursion_limit": 10,
-    }
+    config = {"recursion_limit": 25}
 
     try:
         result = await asyncio.wait_for(
@@ -57,7 +47,11 @@ async def run_agent(user_id: int, user_message: str) -> str:
             ),
             timeout=AGENT_TIMEOUT,
         )
-        return result["messages"][-1].content
+        response = result["messages"][-1].content
+        # LangGraph returns this English string when recursion_limit is hit
+        if not response or "Sorry, need more steps" in response:
+            raise RuntimeError("Agent hit recursion limit")
+        return response
 
     except asyncio.TimeoutError:
         logger.error(f"Agent timed out for user {user_id} after {AGENT_TIMEOUT}s")

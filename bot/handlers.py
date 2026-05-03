@@ -57,21 +57,22 @@ async def start_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user    = await repo.get_user(user_id)
 
-    if user and user.get("onboarded"):
-        await update.message.reply_text(
-            f"ברוך שובך, {user['name']}! 👋\nאני כאן לעזור לך לנהל את התזונה שלך.",
-            reply_markup=main_menu_keyboard(),
-        )
-        return
-
-    # Start onboarding — save state to DB
+    # Always restart onboarding on /start — doubles as a profile reset
     await repo.set_onboarding_state(user_id, {"step": "name"})
-    await update.message.reply_text(
-        "👋 *ברוך הבא לבוט התזונה שלך!*\n\n"
-        "אני אעזור לך לנהל את התזונה, לעקוב אחר קלוריות ולהשיג את המטרות שלך.\n\n"
-        "📝 בואנו נתחיל — *מה שמך?*",
-        parse_mode=ParseMode.MARKDOWN,
-    )
+
+    if user and user.get("onboarded"):
+        msg = (
+            f"ברוך שובך, {user['name']}! 👋\n\n"
+            "בואנו נעדכן את הפרופיל שלך.\n\n"
+            "📝 *מה שמך?*"
+        )
+    else:
+        msg = (
+            "👋 *ברוך הבא לבוט התזונה שלך!*\n\n"
+            "אני אעזור לך לנהל את התזונה, לעקוב אחר קלוריות ולהשיג את המטרות שלך.\n\n"
+            "📝 בואנו נתחיל — *מה שמך?*"
+        )
+    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
 
 
 # ─── Onboarding inline callbacks ──────────────────────────────────────────────
