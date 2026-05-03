@@ -12,6 +12,7 @@ import db.repository as repo
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
+AGENT_TIMEOUT = 60  # seconds
 
 # Global checkpointer — opened once at startup via lifespan
 _memory: AsyncSqliteSaver | None = None
@@ -49,12 +50,18 @@ async def run_agent(user_id: int, user_message: str) -> str:
     }
 
     try:
-        result = await agent.ainvoke(
-            {"messages": [HumanMessage(content=user_message)]},
-            config=config,
+        result = await asyncio.wait_for(
+            agent.ainvoke(
+                {"messages": [HumanMessage(content=user_message)]},
+                config=config,
+            ),
+            timeout=AGENT_TIMEOUT,
         )
         return result["messages"][-1].content
 
+    except asyncio.TimeoutError:
+        logger.error(f"Agent timed out for user {user_id} after {AGENT_TIMEOUT}s")
+        raise
     except Exception as e:
         logger.error(f"Agent error for user {user_id}: {e}", exc_info=True)
         raise

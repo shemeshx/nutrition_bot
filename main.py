@@ -89,7 +89,7 @@ app = FastAPI(lifespan=lifespan)
 async def webhook_handler(request: Request):
     data   = await request.json()
     update = Update.de_json(data, ptb_app.bot)
-    await ptb_app.process_update(update)
+    await ptb_app.update_queue.put(update)
     return {"ok": True}
 
 

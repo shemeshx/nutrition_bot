@@ -143,7 +143,11 @@ async def message_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # Check if in onboarding flow (state persisted in DB)
     ob = await repo.get_onboarding_state(user_id)
     if ob and ob.get("step"):
-        await _handle_onboarding_text(update, ob, text)
+        try:
+            await _handle_onboarding_text(update, ob, text)
+        except Exception as e:
+            logger.error(f"Onboarding error for user {user_id}: {e}", exc_info=True)
+            await update.message.reply_text("😕 קרתה שגיאה, נסה שוב בעוד רגע.")
         return
 
     # Quick menu buttons → natural language
