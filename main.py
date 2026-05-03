@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
@@ -36,10 +37,13 @@ async def lifespan(app: FastAPI):
     logger.info("✅ DB initialized")
 
     # 2. Build Telegram Application
+    #    concurrent_updates=True: removes the default single-update-at-a-time
+    #    semaphore so a slow LLM call never blocks subsequent messages.
     ptb_app = (
         Application.builder()
         .token(settings.TELEGRAM_TOKEN)
         .updater(None)
+        .concurrent_updates(True)
         .build()
     )
 
@@ -80,7 +84,10 @@ app = FastAPI(lifespan=lifespan)
 async def webhook_handler(request: Request):
     data   = await request.json()
     update = Update.de_json(data, ptb_app.bot)
-    await ptb_app.update_queue.put(update)
+    # Fire-and-forget: respond to Telegram immediately, process in background.
+    # Using create_task (not update_queue.put) so we don't rely on PTB's
+    # internal queue consumer being active when updater=None.
+    asyncio.create_task(ptb_app.process_update(update))
     return {"ok": True}
 
 

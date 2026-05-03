@@ -55,24 +55,29 @@ def _calc_targets(profile: dict) -> dict:
 
 async def start_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    user    = await repo.get_user(user_id)
+    try:
+        user = await repo.get_user(user_id)
 
-    # Always restart onboarding on /start — doubles as a profile reset
-    await repo.set_onboarding_state(user_id, {"step": "name"})
+        # Always restart onboarding on /start — doubles as a profile reset.
+        await repo.set_onboarding_state(user_id, {"step": "name"})
 
-    if user and user.get("onboarded"):
-        msg = (
-            f"ברוך שובך, {user['name']}! 👋\n\n"
-            "בואנו נעדכן את הפרופיל שלך.\n\n"
-            "📝 *מה שמך?*"
-        )
-    else:
-        msg = (
-            "👋 *ברוך הבא לבוט התזונה שלך!*\n\n"
-            "אני אעזור לך לנהל את התזונה, לעקוב אחר קלוריות ולהשיג את המטרות שלך.\n\n"
-            "📝 בואנו נתחיל — *מה שמך?*"
-        )
-    await update.message.reply_text(msg, parse_mode=ParseMode.MARKDOWN)
+        name = (user or {}).get("name")
+        if user and user.get("onboarded") and name:
+            msg = (
+                f"ברוך שובך, {name}! 👋\n\n"
+                "בואנו נעדכן את הפרופיל שלך.\n\n"
+                "📝 מה שמך?"
+            )
+        else:
+            msg = (
+                "👋 ברוך הבא לבוט התזונה שלך!\n\n"
+                "אני אעזור לך לנהל את התזונה, לעקוב אחר קלוריות ולהשיג את המטרות שלך.\n\n"
+                "📝 בואנו נתחיל — מה שמך?"
+            )
+        await update.message.reply_text(msg)
+    except Exception as e:
+        logger.error(f"start_handler error for {user_id}: {e}", exc_info=True)
+        await update.message.reply_text("😕 קרתה שגיאה, נסה שוב בעוד רגע.")
 
 
 # ─── Onboarding inline callbacks ──────────────────────────────────────────────
@@ -82,25 +87,34 @@ async def onboarding_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     data    = query.data
     user_id = query.from_user.id
-    ob      = await repo.get_onboarding_state(user_id) or {}
 
-    if data.startswith("gender_"):
-        ob["gender"] = data.split("_")[1]
-        ob["step"]   = "age"
-        await repo.set_onboarding_state(user_id, ob)
-        await query.edit_message_text("מה גילך? (שנים)")
+    try:
+        ob = await repo.get_onboarding_state(user_id) or {}
 
-    elif data.startswith("activity_"):
-        ob["activity"] = data.split("_", 1)[1]
-        ob["step"]     = "goal"
-        await repo.set_onboarding_state(user_id, ob)
-        await query.edit_message_text(
-            "מה המטרה שלך?", reply_markup=onboarding_goal_keyboard()
-        )
+        if data.startswith("gender_"):
+            ob["gender"] = data.split("_")[1]
+            ob["step"]   = "age"
+            await repo.set_onboarding_state(user_id, ob)
+            await query.edit_message_text("מה גילך? (שנים)")
 
-    elif data.startswith("goal_"):
-        ob["goal"] = data.split("_")[1]
-        await _finish_onboarding(query, ob)
+        elif data.startswith("activity_"):
+            ob["activity"] = data.split("_", 1)[1]
+            ob["step"]     = "goal"
+            await repo.set_onboarding_state(user_id, ob)
+            await query.edit_message_text(
+                "מה המטרה שלך?", reply_markup=onboarding_goal_keyboard()
+            )
+
+        elif data.startswith("goal_"):
+            ob["goal"] = data.split("_")[1]
+            await _finish_onboarding(query, ob)
+
+    except Exception as e:
+        logger.error(f"onboarding_callback error for {user_id}: {e}", exc_info=True)
+        try:
+            await query.edit_message_text("😕 קרתה שגיאה, נסה שוב בעוד רגע.")
+        except Exception:
+            pass
 
 
 async def _finish_onboarding(query, ob: dict):
@@ -123,15 +137,18 @@ async def _finish_onboarding(query, ob: dict):
 
     goal_text = {"lose": "ירידה במשקל", "maintain": "שמירה", "gain": "עלייה במסה"}
     await query.edit_message_text(
-        f"✅ *הפרופיל שלך נשמר!*\n\n"
+        f"✅ הפרופיל שלך נשמר!\n\n"
         f"🎯 מטרה: {goal_text.get(ob['goal'])}\n"
-        f"🔥 יעד קלורי: *{targets['cal_target']} קק\"ל ליום*\n"
+        f"🔥 יעד קלורי: {targets['cal_target']} קק\"ל ליום\n"
         f"🥩 חלבון: {targets['protein_g']}g | "
         f"🍞 פחמימות: {targets['carbs_g']}g | "
         f"🫙 שומן: {targets['fat_g']}g\n"
-        f"💧 מים: {targets['water_ml']} מ\"ל\n\n"
-        f"עכשיו פשוט כתוב לי מה אכלת, שאל שאלות, או השתמש בתפריט! 🎉",
-        parse_mode=ParseMode.MARKDOWN,
+        f"💧 מים: {targets['water_ml']} מ\"ל",
+    )
+    # Send a new message to attach the persistent ReplyKeyboard
+    await query.message.reply_text(
+        "עכשיו פשוט כתוב לי מה אכלת, שאל שאלות, או השתמש בתפריט! 🎉",
+        reply_markup=main_menu_keyboard(),
     )
 
 
@@ -147,7 +164,7 @@ async def message_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         try:
             await _handle_onboarding_text(update, ob, text)
         except Exception as e:
-            logger.error(f"Onboarding error for user {user_id}: {e}", exc_info=True)
+            logger.error(f"Onboarding error for {user_id}: {e}", exc_info=True)
             await update.message.reply_text("😕 קרתה שגיאה, נסה שוב בעוד רגע.")
         return
 
@@ -166,13 +183,21 @@ async def message_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
     try:
         response = await run_agent(user_id, text)
-        await update.message.reply_text(
-            response,
-            parse_mode=ParseMode.MARKDOWN,
-            reply_markup=main_menu_keyboard(),
-        )
+        # Try Markdown first; if the LLM generated unbalanced markers fall back
+        # to plain text so the message always reaches the user.
+        try:
+            await update.message.reply_text(
+                response,
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=main_menu_keyboard(),
+            )
+        except Exception:
+            await update.message.reply_text(
+                response,
+                reply_markup=main_menu_keyboard(),
+            )
     except Exception as e:
-        logger.error(f"Handler error: {e}", exc_info=True)
+        logger.error(f"Handler error for {user_id}: {e}", exc_info=True)
         await update.message.reply_text("😕 קרתה שגיאה, נסה שוב בעוד רגע.")
 
 
@@ -220,3 +245,7 @@ async def _handle_onboarding_text(update, ob: dict, text: str):
             )
         except ValueError:
             await update.message.reply_text("⚠️ אנא הכנס מספר תקין למשקל.")
+
+    else:
+        # gender / activity / goal steps use inline buttons — text is ignored
+        await update.message.reply_text("👆 אנא לחץ על אחד הכפתורים למעלה.")
