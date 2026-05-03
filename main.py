@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 
 ptb_app: Application | None = None
+WEBHOOK_PATH = "/webhook"
 
 
 @asynccontextmanager
@@ -54,7 +55,7 @@ async def lifespan(app: FastAPI):
 
     # 4. Initialize + set webhook
     await ptb_app.initialize()
-    webhook_url = f"{settings.WEBHOOK_URL}/webhook/{settings.TELEGRAM_TOKEN}"
+    webhook_url = f"{settings.WEBHOOK_URL}{WEBHOOK_PATH}"
     await ptb_app.bot.set_webhook(url=webhook_url)
     logger.info(f"✅ Webhook set: {webhook_url}")
 
@@ -75,7 +76,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 
-@app.post(f"/webhook/{{{settings.TELEGRAM_TOKEN}}}")
+@app.post(WEBHOOK_PATH)
 async def webhook_handler(request: Request):
     """Telegram sends every update here"""
     data   = await request.json()
